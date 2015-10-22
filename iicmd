@@ -1,71 +1,112 @@
-#!/usr/bin/env bash
+#!/bin/sh
+# 2012/Sep/09 @ Zdenek Styblik
+# Original autor: c00kiemon5ter(Ivan Kanakarakis)
+# Desc: Shell portable version of iicmd by c00kiemon5ter
 
-nick="$1"
-mesg="$2"
-ircd="$3"
-netw="$4"
-chan="$5"
-self="$6"
+nick="${1:-''}"
+mesg="${2:-''}"
+ircd="${3:-''}"
+netw="${4:-''}"
+chan="${5:-''}"
+self="${6:-''}"
 
-read -r cmd extra <<< "$mesg"
-if [[ "$mesg" =~ .*\>.+ ]]; then
-    read -r nicks <<< "${extra#*>}"
-    read -r extra <<< "${extra%>*}"
+read -r cmd extra <<RMSG
+${mesg}
+RMSG
+
+if printf -- "%s" "$mesg" | grep -q -E -e '.*\>.+' ; then
+	read -r nicks <<RNICKS
+${extra#*>}
+RNICKS
+	read -r extra <<REXTRA
+${extra%>*}
+REXTRA
 fi
 
-if [[ "$nicks" == "@all" ]]; then
-    printf -- "/names %s\n" "$chan"
-    nicks=""
-    while test -z "$nicks"; do # wait for the response
-        nicks="$(tail -n2 "$ircd/$netw/out" | grep "[[:digit:]-]\+ [[:digit:]:]\+ = $chan" | cut -d" " -f5-)"
-        sleep .5
-    done
+if [ "${nicks}" = "@all" ]; then
+	printf -- "/names %s\n" "${chan}"
+	nicks=""
+	retry=0
+	while [ -z "${nicks}" ] && [ $retry -lt 3 ]; do # wait for the response
+		nicks="$(tail -n2 "${ircd}/${netw}/out" |\
+			grep "[[:digit:]-]\+ [[:digit:]:]\+ = ${chan}" | cut -d" " -f5-)"
+		sleep .5
+		retry=$((retry+1))
+	done
 fi
 
-commands=(
-    list
-    calc
-    echo
-    fortune
-    ping
-    slap
-    url
-    whereami
-)
-
+commands="list calc echo fortune ping slap url whereami"
 case "$cmd" in
-    list)
-        [[ -n "$nicks" ]] && printf -- "%s: %s\n" "$nicks" "${commands[*]}" || printf -- "%s: %s\n" "$nick" "${commands[*]}"
-        ;;
-    calc)
-        [[ -n "$extra" ]] && printf -- "%f\n" "$(bc -l <<< "$extra")"
-        ;;
-    echo)
-        [[ -n "$nicks" ]] && printf -- "%s: %s\n" "$nicks" "${extra#/}" || printf "%s\n" "${extra#/}"
-        ;;
-    fortune)
-        printf -- "%s\n" "$(fortune -osea)"
-        ;;
-    ping)
-        [[ -n "$nicks" ]] && printf -- "%s: ping!\n" "$nicks" || printf -- "%s: pong!\n" "$nick"
-        ;;
-    slap)
-        printf -- "%s slaps %s with %s\n" "$nick" "${nicks:-his cohones}" "${extra:-a large herpderp}"
-        ;;
-    url)
-        link="$(sed 's;.*\(http[^ ]*\).*;\1;' <<< "$extra")"
-        turl="$(curl -s "http://api.bitly.com/v3/shorten?login=pancakesbot&apiKey=R_ac2adceb07f01d8faca52bb77c67293b&longUrl=${link%#*}&format=txt")"
-        (( ${#link} > 80 )) && tiny=1 || tiny=0
+	'list')
+		if [ -n "${nicks}" ]; then
+			printf -- "%s: %s\n" "${nicks}" "${commands}"
+		else
+			printf -- "%s: %s\n" "${nick}" "${commands}"
+		fi
+		;;
+	'calc')
+		bc_cmd=$(which bc 2>/dev/null)
+		if [ -n "${extra}" ] && [ -n "${bc_cmd}" ]; then
+			printf -- "%f\n" "$(bc -l <<RBCEXTRA
+${extra}
+RBCEXTRA
+)"
+		else
+			printf -- "%s: Sorry, but my calc is b0rked.\n" "${nick}"
+		fi
+		;;
+	'echo')
+		if [ -n "${nicks}" ]; then
+			printf -- "%s: %s\n" "${nicks}" "${extra#/}"
+		else
+			printf -- "%s\n" "${extra#/}"
+		fi
+		;;
+	'fortune')
+		fortune_cmd=$(which fortune 2>/dev/null)
+		if [ -z "${fortune_cmd}" ]; then
+			printf -- "I'm out of fortune cookies! :(\n"
+		else
+			printf -- "%s\n" "$(${fortune_cmd} -osea)"
+		fi
+		;;
+	'ping')
+		if [ -n "${nicks}" ]; then
+			printf -- "%s: ping!\n" "${nicks}"
+		else
+			printf -- "%s: pong!\n" "${nick}"
+		fi
+		;;
+	'slap')
+		printf -- "%s: I'll slap your butt!\n" "${nicks}"
+		;;
+	'url')
+		has_curl=$(which curl 2>/dev/null)
+		if [ -z "${has_curl}" ]; then
+			printf -- "Out of URL probes :(\n"
+			break
+		fi
+		link="$(printf -- "%s" "${extra}" | sed 's;.*\(http[^ ]*\).*;\1;')"
+		turl="$(curl -s "http://api.bitly.com/v3/shorten?login=pancakesbot&apiKey=R_ac2adceb07f01d8faca52bb77c67293b&longUrl=${link%#*}&format=txt")"
 
-        # handle youtube links
-        link="$(sed 's;.*youtube\..*v=\([^&]\+\).*;http://youtube.com/embed/\1;' <<< "$link")"
-        link="$(sed 's;.*youtu\.be/\(.\+\);http://youtube.com/embed/\1;' <<< "$link")"
+		# handle youtube links
+		link="$(printf -- "%s" "${link}" |\
+			sed 's;.*youtube\..*v=\([^&]\+\).*;http://youtube.com/embed/\1;')"
+		link="$(printf -- "%s" "${link}" |\
+			sed 's;.*youtu\.be/\(.\+\);http://youtube.com/embed/\1;')"
 
-        titl="$(curl -s "$link" | sed -n 's;.*<title>\([^<]*\)</title>.*;\1;p')"
-        (( tiny )) && printf -- "%s :: %s\n" "$turl" "$titl" || printf -- "%s\n" "$titl"
-        ;;
-    whereami)
-        printf -- "%s: this! is! %s!!!!!\n" "$nick" "$chan"
-        ;;
+		titl="$(curl --max-redirs 2 -L -s "${link}" | sed -n 's;.*<title>\([^<]*\)</title>.*;\1;p')"
+		if [ -z "${titl}" ]; then
+			titl="No title"
+		fi
+		if [ "${#link}" -gt 80 ]; then
+			printf -- "Title for %s - %s\n" "${turl}" "${titl}"
+		else
+			printf -- "Title for %s - %s\n" "${link}" "${titl}"
+		fi
+		;;
+	'whereami')
+		printf -- "%s: this! is! %s!!!!!\n" "${nick}" "${chan}"
+		;;
 esac
-
+# EOF
